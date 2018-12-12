@@ -1,0 +1,20 @@
+make
+drive2mb
+format
+drive2mb
+mount
+drive2mb
+freespace
+mkdir
+dir1
+freespace
+text
+text_file_1
+This is a text file generated from user input
+chdir
+dir1
+import
+textfile.txt
+text_file_2
+unmount
+exit

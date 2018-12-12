@@ -1,0 +1,39 @@
+#include <stdio.h>
+#include <stdlib.h>
+#define BLOCKSIZE 512
+#define 
+int main(int argc, char** argv){
+  FILE *file = fopen("Drive2MB", "r+b");
+  if (file == NULL){
+    printf("Error loading file, exiting\n");
+    return(-1);
+  }
+  fputc('a', file);
+  fputc('b', file);
+  fputc('c', file);
+  fputc('d', file);
+  
+  if (fseek(file, BLOCKSIZE, SEEK_SET)!= 0){
+    printf("Error finding location blocksize %d in file\n", BLOCKSIZE);
+    return(-1);
+  }
+  
+  fputc('e', file);
+  char* systemType = "LeoFileSystem";
+  fprintf(file, "%s", systemType);
+  printf("Size of string systemType: %d\n",strlen(systemType));
+/*		      
+  while(1){
+    c = fgetc(file);
+    printf("read a char: %x\n", c);
+    if(feof(file)){
+      printf("we have reached the end of file\n");
+      break;
+    }
+  }
+  */
+
+
+
+  fclose(file);
+}
