@@ -1,13 +1,45 @@
-//
-//  lfsLog.c
-//  
-//
-//  Created by Leo Vergnetti on 12/4/18.
-//
 
 #include "lfsLog.h"
 
+//Leo Vergnetti
+//Project 4
+/***************************************************
+ ***************************************************
+ ***************************************************
+  ******************** FILE SYSTEM *****************
+ ***************************************************
+ ***************************************************
+ *The following file system is created for cis3207
+ project4. Based on description in 3 Easy Pieces book,
+ ch. 39-41. Blocksize is 512 bytes.
+ BLOCK 0 system block (superblock)
+ BLOCK 1- 2 Inode and Data region bitmap
+ BLOCK 3-487 Inode Table region
+ BLOCK 488 - 3906 DATA REGION
+ ***************************************************
+ The filesystem only interacts with the drive file in
+ 512 byte blocks, and so all reads to the drive file
+ are done by this amount, using fread fwrite fseek.
+ ***************************************************
+ The shellLFS in project is a demo shell to be used
+ with this file system.
+ ***************************************************/
 
+// FILE SYSTEM VARS
+superBlock sb; //pointer to the superblock, read upon mounting
+FILE * drive; //MUST BE PRESENT IN FILESYSTEM! drive will point to drive FILE when mounting.
+openFileTable OFT; //open file table tracking currently open files via file descriptors
+unsigned int currentWorkingDirectory; //Inumber of current working directory
+char *currentDirectoryName; //string name of the currently working directory
+
+
+/***************************************************
+ METHOD: newEmptyInode
+ INPUT: inumber: int
+ OUTPUT: an empty inode with inumber i
+ DESCRIPTION: takes an integer, mallocs an empty inode
+ initializes the inode, and returns a pointer to it.
+ ***************************************************/
 inode * newEmptyInode(int i){
     inode * emptyInode = malloc(sizeof(inode));
     emptyInode->fileType = -1;
@@ -25,12 +57,15 @@ inode * newEmptyInode(int i){
     return emptyInode;
 }
 
-superBlock sb;
-FILE * drive; //MUST BE PRESENT IN FILESYSTEM! drive will point to drive FILE when mounting.
-openFileTable OFT;
-unsigned int currentWorkingDirectory;
-char *currentDirectoryName;
+
 /***************************************************
+ METHOD: mountLFS
+ INPUT: the name of a drive : string
+ OUTPUT: 0 upon success, -1 on error
+ DESCRIPTION: opens the drive file for binary writing,
+ goes to the beginning of the file and reads the super block.
+ then initializes the current working directory to root, the
+ directory name, and the number of open file table entries
  ***************************************************/
 int mountLFS(char* driveName){
     
@@ -75,7 +110,9 @@ int unmountLFS(){
  INPUT: file : FILE*
  OUTPUT: 0 on success, -1 else
  DESCRIPTION: makeLFS creates an LFS on the specified
- file pointer.  MUST BE 2MB.
+ file pointer.  MUST BE 2MB. simply writes the super
+ block, the bitmaps, and the inode table to their proper
+ drive location.
  ***************************************************/
 int formatDrive(char* driveName){
     sb.size = DRIVESIZE;
@@ -159,7 +196,7 @@ int formatDrive(char* driveName){
  DESCRIPTION: markBitmapAllocated takes a bitnumber
  (corresponding to an inode or a data block, depending
  on which instance is desired) and changes its bit
- to 1 in the bitmap
+ to 1 in the bitmap signifying occupied.
  ***************************************************/
 int markBitmapAllocated(int bitNumber, int bitmap){
     
@@ -187,7 +224,14 @@ int markBitmapAllocated(int bitNumber, int bitmap){
 }
 
 
-
+/*****************************************************
+ METHOD: deallocateBitmap
+ INPUT: bitnumber: int , bitmap : DATA or INODE
+ OUTPUT: 0 on success
+ DESCRIPTION: reads teh bitmap block, then uses masking
+ find the desired bit. Verify is set, adn use XOR to
+ deallocate it.
+ *****************************************************/
 int deallocateBitmap(int bitNumber, int bitmap){
     int byteNumber = bitNumber/8;
     char bytes[BLOCKSIZE];
@@ -218,7 +262,15 @@ int deallocateBitmap(int bitNumber, int bitmap){
     return 0;
 }
 
-
+/***************************************************
+ METHOD: findFreeInodeFromBitmap
+ INPUT: none
+ OUTPUT: inumber: int
+ DESCRIPTION: Returns the inode number of a currently available
+ inode.  uses a bitmask and an offset, first checks if the byte
+ has any free space (ie char not xFF).  Then shifts the mask
+ on 1 to find an availble bit, calculating the number this represents.
+ **************************************************/
 int findFreeInodeFromBitmap(){
     
     //  int byteNumber = bitNumber/8;
@@ -245,6 +297,16 @@ int findFreeInodeFromBitmap(){
     printf("ERROR unable to find empty inode\n");
     return -1;
 }
+
+
+/*******************************************************
+METHOD:findFreeDataBlockFromBitmap
+INPUT: void
+OUTPUT: free datablock (int)
+ DESCRIPTION:same as above method.  NOTE: returns datablock
+ starting from data region, so returned 0 actually corresponds
+ to start of data region.
+ *******************************************************/
 int findFreeDataBlockFromBitmap(){
     unsigned char bytes[BLOCKSIZE];
     //GO TO INODE BITMAP
@@ -272,10 +334,12 @@ int findFreeDataBlockFromBitmap(){
 }
 
 /*************************************
- METHOD: mklDir() makes a directory
+ METHOD: writeDirectoryEntryToDrive
+ INPUT: an entry to be written, and an inumber to write it to
+ OUTPUT: 0 on success
+ DESCRIPTION: Writes a directory entry to the data block.
+ ONLY writes in 512 blocks, and so uses an array of entries (32).
  *************************************/
-
-
 int writeDirectoryEntryToDrive(lDirectoryEntry entryToBeWritten, unsigned int inumberOfDirectory){
     inode *Inode = getInodeFromNumber(inumberOfDirectory);
     Inode->length = Inode->length + 1;
@@ -304,6 +368,15 @@ int writeDirectoryEntryToDrive(lDirectoryEntry entryToBeWritten, unsigned int in
     }
     return(-1);
 }
+/*************************************
+ METHOD:writeInodeToDrive
+ INPUT: pointer to the inode to be written
+ OUTPUT: 0 on successful write
+ DESCRIPTION: First calculates the desired inode address.
+ Then reads the block containing those addresses, modifies
+ the inode entry corresponding to ours in memory, and then
+ rewrites the updated block to memory.
+ *************************************/
 
 int writeInodeToDrive(inode * InodeToBeWritten){
     //FIND BLOCKNUMBER
@@ -330,6 +403,17 @@ int writeInodeToDrive(inode * InodeToBeWritten){
     return(0);
     
 }
+
+
+/*************************************
+ METHOD: getInodeFromNumber
+ INPUT: iNumber : int
+ OUTPUT: inode pointer corresponding to the inumber
+ DESCRIPTION: Similar to above, calculates the block
+ corresponding to the inode number, then goes reads the
+ block.  In memory gets the corresponding inode, and returns
+ an allocated copy.
+ *************************************/
 inode * getInodeFromNumber(int inodeNumber){
     //(inodeNumber * BLOCKSIZE)//
     //FIND BLOCKNUMBER
@@ -363,6 +447,11 @@ inode * getInodeFromNumber(int inodeNumber){
 
 
 /**************************************************
+ METHOD:printSuperBlock
+ INPUT: none
+ OUTPUT: none
+ DESCRIPTION: prints superblock information, primarily
+ for diagnostic purposes.
  **************************************************/
 void printSuperBlock(){
     printf("Drive Size: %u\n", sb.size);
@@ -377,6 +466,11 @@ void printSuperBlock(){
 }
 
 /**************************************************
+ METHOD: printInode
+ INPUT: inode (i dont know why i did that)
+ OUTPUT: none
+ DESCRIPTION: Prints information about the requested inode
+ primarily for diagnostic/ dev purposes.
  **************************************************/
 
 void printInode(inode in){
@@ -399,15 +493,22 @@ void printInode(inode in){
 }
 
 /**************************************************
+ METHOD:addFileToTable
+ INPUT: inode of file
+ OUTPUT: offset (into file for first read)
+ DESCRIPTION: creates an entry in the open file table, with
+ the inode and offset.  returns the entry number (file descriptor)
+ of the table entry.
  **************************************************/
 int addFileToTable(inode * inodeOfFile, unsigned int offset){
     // allocate a FTENTRY
     openFileTableEntry * FTE = malloc(sizeof(openFileTableEntry));
     // initialize ftentry with occupied, block, offset 0, inode
-    
+    /*
     FTE->occupied = 1;
     FTE->Inode = inodeOfFile;
     FTE->offset = offset;
+    */
     //FTE->blockNumber = blockNumber;
     // find vacant slot in open file table
     int i;
@@ -431,6 +532,11 @@ int addFileToTable(inode * inodeOfFile, unsigned int offset){
 
 
 /**************************************************
+ METHOD: removeFileFromTable
+ INPUT: file descriptor
+ OUTPUT:0 on success
+ DESCRIPTION: sets the information to empty, and frees
+ the inode associated with the entry.
  **************************************************/
 int removeFileFromTable(int fd){
     if (OFT.openFiles[fd].occupied != 0){
@@ -442,9 +548,16 @@ int removeFileFromTable(int fd){
     return(-1);
 }
 /**************************************************
+ METHOD: lCreateFile
+ INPUT: file name : string
+ OUTPUT: 0 on success
+ DESCRIPTION: lCreateFile creates a file in the file system.
+ First finds a free inode from bitmpa, and then updates
+ the inode. Finds an available data block associated with it
+ and sets the first pointer in the inode. writes the
+ directory entry to the directory (using writeDirectoryEntryToDrive)
  **************************************************/
 
-//CURRENTLY CREATES FILE IN ROOT DIR
 int lCreateFile(char* fileName){
     if(searchDirByFileName(fileName)){
         printf("file named %s already exists\n", fileName);
@@ -458,14 +571,6 @@ int lCreateFile(char* fileName){
         printf("Unable to find free inode\n");
         return(-1);
     }
-    //CREATE AND INIT INODE FOR FILE
-    /*inode inodeOfFile;
-     inodeOfFile.inumber = inumber;
-     inodeOfFile.fileType = 1;
-     inodeOfFile.numberOfBlocks = 1;
-     inodeOfFile.created = time(NULL);
-     inodeOfFile.modified = time(NULL);
-     */
     inode *inodeOfFile = getInodeFromNumber(inumber);
     inodeOfFile->fileType = 1;
     inodeOfFile->numberOfBlocks = 1;
@@ -495,8 +600,15 @@ int lCreateFile(char* fileName){
     writeDirectoryEntryToDrive(ldirent, currentWorkingDirectory);
     return(0);
 }
-//TODO: Method to Add directory entry to block
+
 /**************************************************
+ METHOD: prints system directory (and file) tree to screen
+ INPUT: an inumber, parentInumber, and the current Level
+ OUTPUT: none
+ DESCRIPTION: prints the contents of each directory in
+ depth first manner. Upon finding a new directory, recursively
+ calls itself on the new directory, updating the current level
+ (for formatting spaces).
  **************************************************/
 void printDirectoryContents(int inumber, int parentInumber, int level){
     if(level == 0){
@@ -525,7 +637,7 @@ void printDirectoryContents(int inumber, int parentInumber, int level){
                 string[ldirent[j].namelen] = '\0';
                 int k;
                 for(k = 0; k < level+1; k++){
-                    printf("|-- ");
+                    printf("|------ ");
                 }
                 printf("%s\n", string);
                 inode * childInode = getInodeFromNumber(ldirent[j].inumber);
@@ -537,20 +649,15 @@ void printDirectoryContents(int inumber, int parentInumber, int level){
     }
 }
 
-//OPEN LOGIC
-//FOR WRITING
-//IF FILE EXISTS
-//1. DELETE IT
-//DELETE FILE
-//CREATE NEW FILE
-//2. APPEND TO IT
-//OPEN FILE
-//SET OFFSET AND BLOCKNUMBER IN TABLE
-//IF NO FILE EXISTS
-//1. CREATE IT
-//FOR READING
 
 /**************************************************
+ METHOD: lOpenFile
+ INPUT: fileName: string , flag: string
+ OUTPUT: file descriptor: int
+ DESCRIPTION: opens file for reading, writing, or appending
+ based on flag.  If appending, offset is set to final position.
+ then calls addFileToTable to add the entry, simply returns
+ that value (file descriptor).
  **************************************************/
 int lOpenFile(char* fileName, char * flag){
     //r for read only (begins at start of file)
@@ -577,6 +684,11 @@ int lOpenFile(char* fileName, char * flag){
 }
 
 /**************************************************
+ METHOD: lCloseFile
+ INPUT: file descriptor : int
+ OUTPUT: 0 on success
+ DESCRIPTION: writes the inode of the file descriptor
+ to drive and deallocates file descriptor.
  **************************************************/
 int lCloseFile(int fd){
     writeInodeToDrive(OFT.openFiles[fd].Inode);
@@ -585,6 +697,11 @@ int lCloseFile(int fd){
 }
 
 /**************************************************
+ METHOD: printOpenFileTable
+ INPUT: none
+ OUTPUT: none
+ DESCRIPTION: prints current contents of the open
+ file table. primarily for diagnostic/ development purposes
  **************************************************/
 void printOpenFileTable(){
     int i;
@@ -601,6 +718,12 @@ void printOpenFileTable(){
 
 //makeNewDirectoryBlock
 /**************************************************
+ METHOD: makeEmptyDirectoryBlock
+ INPUT: none
+ OUTPUT: datablock number: int
+ DESCRIPTION: inits and writes an empty data block for
+ use with directories in the data region.  can hold up
+ to 32 directory entries / block.
  **************************************************/
 unsigned int makeEmptyDirectoryBlock(){
     //1. FIND EMPTY DATABLOCK
@@ -627,6 +750,16 @@ unsigned int makeEmptyDirectoryBlock(){
 
 //MAKE NEW DIRECTORY
 /**************************************************
+ METHOD: lmkDir
+ INPUT: directory name : string
+ OUTPUT: 0 on success
+ DESCRIPTION: lmkDir first checks if the directory
+ has a name associated with that inumber already . if
+ so the request is thrown out.  Else, the inode is allocated.
+ via a call to the bitmap, as is a free data block.
+ The parent and self directory entries (. and ..) are created.
+ The entry is then written to the Current working directory,
+ where the inode length is updated.
  **************************************************/
 int lmkDir(char* dirName){
     if(searchDirByFileName(dirName)){
@@ -705,6 +838,14 @@ int searchDirByFileName(char* fileName){
 }
 
 /**************************************************
+ METHOD: removeDirentByFileName
+ INPUT: file name : string
+ OUTPUT: 0 on success
+ DESCRIPTION: First we find the inode, and load teh associated
+ data block.  We check the block for the appropriate file name
+ using strcmp (some formatting to eliminate need for null char in
+ filename). we update the length and string of the entry,
+ and rewrite the block to drive.
  **************************************************/
 int removeDirentByFileName(char* fileName){
     inode *currentInode = getInodeFromNumber(currentWorkingDirectory);
@@ -740,6 +881,13 @@ int removeDirentByFileName(char* fileName){
 
 //CHANGE CURRENT WORKING DIRECTORY
 /**************************************************
+ METHOD: changeCurrentWorkingDirectory
+ INPUT: target directory name : string
+ OUTPUT: inumber of target directory: int
+ DESCRIPTION: we get the desired inode by calling
+ searchDirByFileName, which returns the inumber
+ of the requested directory.  Then we update
+ the currentworking directory to this directory.
  **************************************************/
 int changeCurrentWorkingDirectory(char* dirName){
     //int numberOfNewDir = searchDirByFileName(dirName);
@@ -755,16 +903,15 @@ int changeCurrentWorkingDirectory(char* dirName){
 }
 
 /**************************************************
+ METHOD: printCurrentWorkingDirectory
+ INPUT: none
+ OUTPUT: none
+ DESCRIPTION:prints the name of the current working
+ directory, formatted as entry (used primarily for
+ use with shellLFS. (yes very bad)
  **************************************************/
 void printCurrentWorkingDirectory(){
-    inode* Inode = getInodeFromNumber(currentWorkingDirectory);
-    
-    free(Inode);
-    //if ROOT return "/"
-    //else get parent inode
-    //find inumber in parent directory
-    //return name
-    //rintf("Inumber of CurrentWorkingDirectory: %d\n", currentWorkingDirectory);
+
     printf("%s>:", currentDirectoryName);
 }
 
@@ -772,6 +919,13 @@ void printCurrentWorkingDirectory(){
 
 //WRITE TO FILE
 /**************************************************
+ METHOD: lWriteFile
+ INPUT: filedescriptor: int, character : c
+ OUTPUT: 0 on success
+ DESCRIPTION: writes a character to the data region
+ of the file descriptor attached.  allocates a new
+ data region if required. returns 0 on success, or -1
+ upon failure.
  **************************************************/
 int lWriteFile(int fd, char c){
     unsigned int offset = OFT.openFiles[fd].offset;
@@ -811,12 +965,16 @@ int lWriteFile(int fd, char c){
     OFT.openFiles[fd].offset = offset + 1;
     OFT.openFiles[fd].Inode->length = OFT.openFiles[fd].Inode->length + 1;
     //save inode
-    // writeInodeToDrive(OFT.openFiles[fd].Inode);
     return 0;
 }
 
 //READ FROM FILE
 /**************************************************
+ METHOD: lReadFile
+ INPUT: file descriptor: int
+ OUTPUT: character c
+ DESCRIPTION: reads the character associated with
+ the offset in the file table.
  **************************************************/
 char lReadFile(int fd){
     char retc;
@@ -839,6 +997,12 @@ char lReadFile(int fd){
     return retc;
 }
 
+/*****************************************************
+ METHOD: makeDrive
+ INPUT: name of file candidate: string
+ OUTPUT: none
+ DESCRIPTION: creates a new empty file of 2Mb
+ *****************************************************/
 void makeDrive(char * fileName){
     FILE * file = fopen(fileName, "w+b");
     int i;
@@ -850,20 +1014,36 @@ void makeDrive(char * fileName){
 
 //MAKE DIR DATA BLOCK
 /*****************************************************
- METHOD: printAvali
- INPUT:
+ METHOD: printAvailableDataBlocks
+ INPUT: none
+ OUTPUT: none
+ DESCRIPTION: returns the number of free data blocks, along with
+ its size in bytes.
  *****************************************************/
 void printAvailableDataBlocks(){
     printf("Free blocks: %d\nFree bytes: %d\n\n", sb.availableDataBlocks, sb.availableDataBlocks*BLOCKSIZE);
 }
 
 /**************************************************
+ METHOD: ls()
+ INPUT: none
+ OUTPUT: none
+ DESCRIPTION: user friendly call to print contents
+ of directory system.
  **************************************************/
 void ls(){
     printDirectoryContents(1,1,0);
 }
 
 /**************************************************
+ METHOD: lDeleteFile
+ INPUT: name of file to be deleted : string
+ OUTPUT: none
+ DESCRIPTION: deletes the file associated with the file name.
+ First gets inumber of file and the parent to be deleted.
+ Frees all blocks associated with file, then removes directory
+ entry of file in parent.  frees inode associated with file
+ and updates length of parent.
  **************************************************/
 void lDeleteFile(char* fileToBeDeleted){
     //GET INUMBER OF FILE
@@ -893,10 +1073,14 @@ void lDeleteFile(char* fileToBeDeleted){
     writeInodeToDrive(InodeOfParentFile);
     
 }
-//TODO: method to print only contents of directory
-
-
-//TODO: method to get filename by Inumber
+/**************************************************
+METHOD: getDirNameByInumber
+ INPUT: inumber : int
+ OUTPUT: name of directory: string (NULL on notfound/error)
+DESCRIPTION: Returns the high level name of directory.
+ First goes to parent directory, and finds the entry of
+ file listed there.  allocates and returns this name.
+ **************************************************/
 char* getDirNameByInumber(int inumber){
     //if root
     char * retVal;
